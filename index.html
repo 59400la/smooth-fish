@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>✨ Spirit Mask Booth</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=Cinzel:wght@700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+–ink: #1a1a2e;
+–teal: #4ECDC4;
+–cream: #f5f0e8;
+–gold: #c9a84c;
+–mist: rgba(255,255,255,0.08);
+}
+
+body {
+background: var(–ink);
+min-height: 100vh;
+display: flex;
+flex-direction: column;
+align-items: center;
+font-family: ‘Noto Serif SC’, serif;
+color: var(–cream);
+overflow-x: hidden;
+}
+
+/* Ink wash background */
+body::before {
+content: ‘’;
+position: fixed; inset: 0;
+background: radial-gradient(ellipse 80% 60% at 50% 0%, #1e3a5f44 0%, transparent 70%),
+radial-gradient(ellipse 60% 40% at 80% 80%, #4ECDC41a 0%, transparent 60%);
+pointer-events: none;
+}
+
+header {
+padding: 2rem 1rem 1rem;
+text-align: center;
+position: relative;
+}
+header h1 {
+font-family: ‘Cinzel’, serif;
+font-size: clamp(1.4rem, 5vw, 2.4rem);
+letter-spacing: 0.12em;
+color: var(–cream);
+text-shadow: 0 0 30px var(–teal);
+}
+header p {
+margin-top: 0.5rem;
+font-size: 0.85rem;
+color: #aaa;
+letter-spacing: 0.06em;
+}
+.divider {
+width: 120px; height: 2px;
+background: linear-gradient(90deg, transparent, var(–gold), transparent);
+margin: 0.8rem auto 0;
+}
+
+.stage {
+position: relative;
+width: min(520px, 96vw);
+aspect-ratio: 3/4;
+margin: 1.5rem auto;
+border-radius: 18px;
+overflow: hidden;
+box-shadow: 0 0 0 1px #ffffff18, 0 20px 60px #00000088;
+background: #0d0d1a;
+}
+
+#videoEl {
+position: absolute; inset: 0;
+width: 100%; height: 100%;
+object-fit: cover;
+transform: scaleX(-1);
+}
+
+#mainCanvas {
+position: absolute; inset: 0;
+width: 100%; height: 100%;
+object-fit: cover;
+}
+
+.overlay-hint {
+position: absolute;
+bottom: 1rem; left: 0; right: 0;
+text-align: center;
+font-size: 0.75rem;
+color: rgba(255,255,255,0.5);
+pointer-events: none;
+transition: opacity 0.4s;
+}
+
+.controls {
+display: flex;
+flex-wrap: wrap;
+gap: 0.75rem;
+justify-content: center;
+padding: 0 1rem 1rem;
+max-width: 520px;
+width: 100%;
+margin: 0 auto;
+}
+
+button {
+font-family: ‘Noto Serif SC’, serif;
+font-size: 0.85rem;
+letter-spacing: 0.06em;
+padding: 0.55rem 1.4rem;
+border: 1px solid #ffffff30;
+border-radius: 40px;
+cursor: pointer;
+transition: all 0.2s;
+background: var(–mist);
+color: var(–cream);
+backdrop-filter: blur(8px);
+}
+button:hover { background: rgba(78,205,196,0.2); border-color: var(–teal); color: #fff; }
+button.primary {
+background: linear-gradient(135deg, #4ECDC4, #2a9d8f);
+border: none; color: #fff;
+font-weight: 700;
+box-shadow: 0 4px 20px #4ECDC455;
+}
+button.primary:hover { filter: brightness(1.15); transform: translateY(-1px); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.status-bar {
+text-align: center;
+font-size: 0.78rem;
+color: var(–teal);
+min-height: 1.4rem;
+letter-spacing: 0.05em;
+padding-bottom: 0.5rem;
+}
+
+.snapshot-strip {
+display: flex;
+gap: 0.6rem;
+padding: 0 1rem 2rem;
+overflow-x: auto;
+max-width: 520px;
+width: 100%;
+margin: 0 auto;
+}
+.snapshot-strip img {
+height: 90px;
+border-radius: 8px;
+border: 1px solid #ffffff22;
+cursor: pointer;
+transition: transform 0.2s, border-color 0.2s;
+flex-shrink: 0;
+}
+.snapshot-strip img:hover { transform: scale(1.06); border-color: var(–teal); }
+
+#loadingOverlay {
+position: fixed; inset: 0;
+background: #0d0d1a;
+display: flex; flex-direction: column;
+align-items: center; justify-content: center;
+z-index: 999;
+gap: 1rem;
+transition: opacity 0.5s;
+}
+#loadingOverlay.hidden { opacity: 0; pointer-events: none; }
+.loader-ring {
+width: 52px; height: 52px;
+border: 3px solid #ffffff18;
+border-top-color: var(–teal);
+border-radius: 50%;
+animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loader-text { font-size: 0.85rem; color: #aaa; letter-spacing: 0.1em; }
+
+#faceApiStatus {
+font-size: 0.7rem;
+color: #666;
+text-align: center;
+padding-bottom: 0.3rem;
+}
+</style>
+
+</head>
+<body>
+
+<div id="loadingOverlay">
+  <div class="loader-ring"></div>
+  <div class="loader-text">Loading Spirit Models…</div>
+</div>
+
+<header>
+  <h1>Spirit Mask Booth</h1>
+  <p>幻 · Face Detection Cosplay Filter</p>
+  <div class="divider"></div>
+</header>
+
+<div class="stage">
+  <video id="videoEl" autoplay muted playsinline></video>
+  <canvas id="mainCanvas"></canvas>
+  <div class="overlay-hint" id="hint">Align your face in the frame</div>
+</div>
+
+<div class="status-bar" id="statusBar">Starting camera…</div>
+<div id="faceApiStatus"></div>
+
+<div class="controls">
+  <button id="btnSnap" class="primary" disabled>📸 Capture</button>
+  <button id="btnToggleMask">🎭 Toggle Mask</button>
+  <button id="btnMirror">↔ Mirror</button>
+  <button id="btnDownload" disabled>⬇ Save Last</button>
+</div>
+
+<div class="snapshot-strip" id="strip"></div>
+
+<!-- face-api.js from CDN -->
+
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+<script>
+// ─── Assets (base64 from uploaded files) ────────────────────────────────────
+// We load the mask & eyebrow images as Image objects from the file paths
+// Since we're in a standalone HTML, we embed them via fetch → blob URL trick
+// But because this runs in the Claude artifact sandbox, we'll load from
+// the user-uploaded paths using fetch, falling back to inline placeholders.
+
+const MASK_URL   = '/mnt/user-data/uploads/IMG_5721.png';
+const BROW_URL   = '/mnt/user-data/uploads/MagicEraser_260405_200251.png';
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let video, canvas, ctx;
+let maskImg = new Image(), browImg = new Image();
+let maskReady = false, browReady = false;
+let modelsLoaded = false;
+let animId = null;
+let showMask = true;
+let mirrored = true;
+let lastBlob = null;
+let detections = null;
+let snapshots = [];
+
+// Distortion parameters
+const FAT = 1.22;       // face width balloon factor
+const EYE_SCALE = 1.28; // eye enlargement
+const MOUTH_LIFT = 0.04; // fraction of face height to lift mouth corners
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  video  = document.getElementById('videoEl');
+  canvas = document.getElementById('mainCanvas');
+  ctx    = canvas.getContext('2d');
+
+  document.getElementById('btnSnap').addEventListener('click', takeSnapshot);
+  document.getElementById('btnToggleMask').addEventListener('click', () => { showMask = !showMask; });
+  document.getElementById('btnMirror').addEventListener('click', () => {
+    mirrored = !mirrored;
+    video.style.transform = mirrored ? 'scaleX(-1)' : 'scaleX(1)';
+  });
+  document.getElementById('btnDownload').addEventListener('click', downloadLast);
+
+  // Load images
+  await Promise.all([loadImg(maskImg, MASK_URL), loadImg(browImg, BROW_URL)]);
+  maskReady = true; browReady = true;
+
+  // Load face-api models from JSDelivr
+  const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
+  document.getElementById('faceApiStatus').textContent = 'Loading face detection models…';
+  try {
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+    modelsLoaded = true;
+    document.getElementById('faceApiStatus').textContent = '✓ Models ready';
+  } catch(e) {
+    // fallback: try cdnjs
+    try {
+      const M2 = 'https://justadudewhohacks.github.io/face-api.js/models';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(M2);
+      await faceapi.nets.faceLandmark68TinyNet.loadFromUri(M2);
+      modelsLoaded = true;
+      document.getElementById('faceApiStatus').textContent = '✓ Models ready';
+    } catch(e2) {
+      document.getElementById('faceApiStatus').textContent = '⚠ Face detection unavailable — mask centered';
+    }
+  }
+
+  // Start camera
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user', width:640, height:480 }, audio: false });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      canvas.width  = video.videoWidth  || 640;
+      canvas.height = video.videoHeight || 480;
+      document.getElementById('loadingOverlay').classList.add('hidden');
+      document.getElementById('btnSnap').disabled = false;
+      document.getElementById('statusBar').textContent = 'Face detected — enjoy!';
+      startLoop();
+    };
+  } catch(e) {
+    document.getElementById('statusBar').textContent = '⚠ Camera access denied.';
+    document.getElementById('loadingOverlay').classList.add('hidden');
+  }
+});
+
+function loadImg(img, src) {
+  return new Promise(res => {
+    img.onload  = res;
+    img.onerror = res; // silent fail
+    img.src     = src;
+    img.crossOrigin = 'anonymous';
+  });
+}
+
+// ─── Main Render Loop ─────────────────────────────────────────────────────────
+let frameCount = 0;
+async function startLoop() {
+  function loop() {
+    animId = requestAnimationFrame(loop);
+    renderFrame();
+    frameCount++;
+    // Run face detection every 6 frames
+    if (frameCount % 6 === 0 && modelsLoaded) {
+      detectFace(); // async, result stored in `detections`
+    }
+  }
+  loop();
+}
+
+async function detectFace() {
+  try {
+    const result = await faceapi
+      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+      .withFaceLandmarks(true);
+    detections = result || null;
+    if (detections) {
+      document.getElementById('hint').style.opacity = '0';
+      document.getElementById('statusBar').textContent = '✨ Spirit detected!';
+    } else {
+      document.getElementById('hint').style.opacity = '1';
+      document.getElementById('statusBar').textContent = 'Looking for a face…';
+    }
+  } catch(e) { detections = null; }
+}
+
+function renderFrame() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw mirrored video
+  ctx.save();
+  if (mirrored) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, W, H);
+  ctx.restore();
+
+  if (!showMask) return;
+
+  if (detections) {
+    drawMaskedFace(detections, W, H);
+  } else {
+    // Fallback: center the mask
+    drawMaskCentered(W, H);
+  }
+}
+
+// ─── Distorted Face Drawing ───────────────────────────────────────────────────
+function drawMaskedFace(det, W, H) {
+  const lms = det.landmarks;
+  const jaw        = lms.getJawOutline();        // 17 pts
+  const leftBrow   = lms.getLeftEyeBrow();
+  const rightBrow  = lms.getRightEyeBrow();
+  const leftEye    = lms.getLeftEye();
+  const rightEye   = lms.getRightEye();
+  const mouth      = lms.getMouth();
+  const nose       = lms.getNose();
+
+  // Mirror if needed
+  const mx = pt => mirrored ? { x: W - pt.x, y: pt.y } : pt;
+
+  const jaw2   = jaw.map(mx);
+  const lb2    = leftBrow.map(mx);
+  const rb2    = rightBrow.map(mx);
+  const le2    = leftEye.map(mx);
+  const re2    = rightEye.map(mx);
+  const mo2    = mouth.map(mx);
+  const nose2  = nose.map(mx);
+
+  // Compute face bounding box from landmarks
+  const allPts = [...jaw2, ...lb2, ...rb2];
+  const xs = allPts.map(p => p.x);
+  const ys = allPts.map(p => p.y);
+  const faceLeft   = Math.min(...xs);
+  const faceRight  = Math.max(...xs);
+  const faceTop    = Math.min(...ys) - (jaw2[8].y - Math.min(...ys)) * 0.55; // forehead
+  const faceBottom = jaw2[8].y + (jaw2[8].y - Math.min(...ys)) * 0.12;
+  const faceW      = faceRight - faceLeft;
+  const faceH      = faceBottom - faceTop;
+  const faceCX     = (faceLeft + faceRight) / 2;
+  const faceCY     = (faceTop + faceBottom) / 2;
+
+  // ── 1. Distort face region (fat/balloon warp) ──────────────────────────────
+  // We'll use a radial bulge on the face area via offscreen canvas
+  const pad = faceW * 0.55;
+  const sx = Math.max(0, faceCX - faceW * FAT * 0.5 - pad);
+  const sy = Math.max(0, faceTop - faceH * 0.1 - pad);
+  const sw = faceW * FAT + pad * 2;
+  const sh = faceH * 1.1 + pad * 2;
+
+  const offW = Math.round(sw), offH = Math.round(sh);
+  const off = new OffscreenCanvas(offW, offH);
+  const octx = off.getContext('2d');
+
+  // Grab the frame from main canvas
+  const frameData = ctx.getImageData(0, 0, W, H);
+
+  // Barrel/bulge distortion on the face patch
+  const distorted = bulgeDistort(frameData, W, H, faceCX, faceCY, faceW * 0.58, FAT);
+
+  // Draw distorted frame patch to offscreen
+  const tempC = new OffscreenCanvas(W, H);
+  tempC.getContext('2d').putImageData(distorted, 0, 0);
+  octx.drawImage(tempC, sx, sy, sw, sh, 0, 0, offW, offH);
+
+  // ── 2. Eye enlargement ────────────────────────────────────────────────────
+  enlargeEyeInOff(octx, frameData, W, H, le2, faceCX, faceCY, sx, sy);
+  enlargeEyeInOff(octx, frameData, W, H, re2, faceCX, faceCY, sx, sy);
+
+  // ── 3. Mouth lift ─────────────────────────────────────────────────────────
+  liftMouthCornersOff(octx, frameData, W, H, mo2, faceCX, faceCY, faceH, sx, sy, sw, sh);
+
+  // Paste distorted face back
+  ctx.save();
+  // Clip to face ellipse shape (slightly fattened)
+  ctx.beginPath();
+  ctx.ellipse(faceCX, faceCY, faceW * FAT * 0.55, faceH * 0.56, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(off, sx, sy, sw, sh);
+  ctx.restore();
+
+  // ── 4. Overlay mask ──────────────────────────────────────────────────────
+  if (maskReady && maskImg.naturalWidth > 0) {
+    // Position mask so its oval opening aligns with face
+    // Mask has opening ~55% of its height, centred ~60% down
+    const maskAR = maskImg.naturalWidth / maskImg.naturalHeight;
+    const targetMaskH = faceH * 2.6;
+    const targetMaskW = targetMaskH * maskAR;
+    const maskX = faceCX - targetMaskW * 0.5;
+    const maskY = faceCY - targetMaskH * 0.62;
+    ctx.drawImage(maskImg, maskX, maskY, targetMaskW, targetMaskH);
+  }
+
+  // ── 5. Overlay eyebrows strip ─────────────────────────────────────────────
+  if (browReady && browImg.naturalWidth > 0) {
+    // Eyebrow strip: position so the brows sit just above the eyes
+    const browCY = (centroid(lb2).y + centroid(rb2).y) / 2;
+    const browSpan = Math.abs(centroid(rb2).x - centroid(lb2).x) * 1.8;
+    const browAR = browImg.naturalWidth / browImg.naturalHeight;
+    const browH = browSpan / browAR;
+    const browX = faceCX - browSpan / 2;
+    const browY = browCY - browH * 0.75;
+    ctx.drawImage(browImg, browX, browY, browSpan, browH);
+  }
+}
+
+function centroid(pts) {
+  const x = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const y = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  return { x, y };
+}
+
+// ─── Fallback: center mask ────────────────────────────────────────────────────
+function drawMaskCentered(W, H) {
+  if (!maskReady || maskImg.naturalWidth === 0) return;
+  const maskAR = maskImg.naturalWidth / maskImg.naturalHeight;
+  const mh = H * 0.85;
+  const mw = mh * maskAR;
+  ctx.drawImage(maskImg, (W - mw) / 2, H * 0.05, mw, mh);
+}
+
+// ─── Bulge Distortion (pixel shader style) ───────────────────────────────────
+function bulgeDistort(imageData, W, H, cx, cy, radius, strength) {
+  const src  = imageData.data;
+  const out  = ctx.createImageData(W, H);
+  const dst  = out.data;
+  const r2   = radius * radius;
+  const bulge = (strength - 1) * 0.6; // tune
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const dx = x - cx, dy = y - cy;
+      const d2 = dx*dx + dy*dy;
+      let sx = x, sy = y;
+      if (d2 < r2) {
+        const t = Math.sqrt(d2) / radius; // 0..1
+        const factor = 1 - bulge * Math.pow(1 - t, 2); // gentle centre bulge
+        sx = cx + dx * factor;
+        sy = cy + dy * factor;
+      }
+      // bilinear sample
+      const ix = Math.min(W-2, Math.max(0, sx|0));
+      const iy = Math.min(H-2, Math.max(0, sy|0));
+      const fx = sx - ix, fy = sy - iy;
+      const i00 = (iy * W + ix) * 4;
+      const i10 = i00 + 4;
+      const i01 = i00 + W*4;
+      const i11 = i01 + 4;
+      const dstI = (y * W + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        dst[dstI+c] = lerp(lerp(src[i00+c], src[i10+c], fx), lerp(src[i01+c], src[i11+c], fx), fy);
+      }
+    }
+  }
+  return out;
+}
+
+function lerp(a, b, t) { return a + (b-a)*t; }
+
+// ─── Eye Enlargement (draw zoomed eye region) ─────────────────────────────────
+function enlargeEyeInOff(octx, frameData, W, H, eyePts, faceCX, faceCY, sx, sy) {
+  const ec = centroid(eyePts);
+  const eyeW = Math.abs(eyePts[3].x - eyePts[0].x) * 1.5;
+  const eyeH = eyeW * 0.65;
+  // Source region (smaller = zoom)
+  const srcW = eyeW / EYE_SCALE, srcH = eyeH / EYE_SCALE;
+  const srcX = ec.x - srcW/2, srcY = ec.y - srcH/2;
+  const dstX = (ec.x - eyeW/2) - sx, dstY = (ec.y - eyeH/2) - sy;
+  // Copy scaled region
+  const tmp = new OffscreenCanvas(Math.round(eyeW), Math.round(eyeH));
+  const tc  = tmp.getContext('2d');
+  // Draw from frame into tmp at scaled size
+  const tempFull = new OffscreenCanvas(W, H);
+  tempFull.getContext('2d').putImageData(frameData, 0, 0);
+  tc.drawImage(tempFull, srcX, srcY, srcW, srcH, 0, 0, eyeW, eyeH);
+  // Blend onto off canvas with soft ellipse clip
+  octx.save();
+  octx.beginPath();
+  octx.ellipse(dstX + eyeW/2, dstY + eyeH/2, eyeW/2, eyeH/2, 0, 0, Math.PI*2);
+  octx.clip();
+  octx.drawImage(tmp, dstX, dstY);
+  octx.restore();
+}
+
+// ─── Mouth Corner Lift ────────────────────────────────────────────────────────
+function liftMouthCornersOff(octx, frameData, W, H, mouthPts, faceCX, faceCY, faceH, sx, sy, sw, sh) {
+  // Corner points: mouthPts[0]=left corner, mouthPts[6]=right corner
+  const liftY = faceH * MOUTH_LIFT;
+  const patchSize = faceH * 0.18;
+  const corners = [mouthPts[0], mouthPts[6]];
+  const tempFull = new OffscreenCanvas(W, H);
+  tempFull.getContext('2d').putImageData(frameData, 0, 0);
+
+  corners.forEach(cp => {
+    const px = cp.x, py = cp.y;
+    const pdx = px - sx, pdy = py - sy;
+    // Sample a patch around corner from original
+    octx.save();
+    octx.beginPath();
+    octx.ellipse(pdx, pdy - liftY/2, patchSize*0.55, patchSize*0.55, 0, 0, Math.PI*2);
+    octx.clip();
+    octx.drawImage(tempFull, px - patchSize/2, py - patchSize/2, patchSize, patchSize,
+                   pdx - patchSize/2, pdy - patchSize/2 - liftY, patchSize, patchSize);
+    octx.restore();
+  });
+}
+
+// ─── Snapshot ────────────────────────────────────────────────────────────────
+function takeSnapshot() {
+  canvas.toBlob(blob => {
+    lastBlob = blob;
+    document.getElementById('btnDownload').disabled = false;
+    const url = URL.createObjectURL(blob);
+    snapshots.push(url);
+    const strip = document.getElementById('strip');
+    const img = document.createElement('img');
+    img.src = url;
+    img.title = 'Click to download';
+    img.addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = url; a.download = `spirit_${Date.now()}.png`; a.click();
+    });
+    strip.appendChild(img);
+    strip.scrollLeft = strip.scrollWidth;
+    // Flash effect
+    canvas.style.filter = 'brightness(2)';
+    setTimeout(() => canvas.style.filter = '', 120);
+  }, 'image/png');
+}
+
+function downloadLast() {
+  if (!lastBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(lastBlob);
+  a.download = `spirit_mask_${Date.now()}.png`;
+  a.click();
+}
+</script>
+
+</body>
+</html>
