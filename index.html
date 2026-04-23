@@ -16,7 +16,7 @@
   header p{margin-top:.4rem;font-size:.82rem;color:#aaa;letter-spacing:.06em;}
   .divider{width:120px;height:2px;background:linear-gradient(90deg,transparent,var(--gold),transparent);margin:.6rem auto 0;}
   .stage{position:relative;width:min(480px,96vw);aspect-ratio:3/4;margin:1rem auto;border-radius:18px;overflow:hidden;box-shadow:0 0 0 1px #ffffff18,0 20px 60px #00000088;background:#0d0d1a;}
-  #videoEl{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+  #videoEl{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
   #mainCanvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
   .overlay-hint{position:absolute;bottom:1rem;left:0;right:0;text-align:center;font-size:.75rem;color:rgba(255,255,255,.5);pointer-events:none;transition:opacity .4s;}
   .controls{display:flex;flex-wrap:wrap;gap:.6rem;justify-content:center;padding:0 1rem .8rem;max-width:480px;width:100%;margin:0 auto;}
@@ -69,17 +69,21 @@ const RIGHT_BROW_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPcAAABgCA
 
 // ── Measured oval hole in IMG_5721.png ────────────────────────────────────
 // top=0.3588H  bottom=0.7759H  centerY=0.5674H  centerX=0.5005W
-// height=0.4171H  width=0.8375W  (w/h aspect = 1.2971)
+// height=0.4171H  width=0.8375W  aspect(w/h)=1.2971
 const HOLE_CY   = 0.5674;
 const HOLE_CX   = 0.5005;
-const HOLE_H    = 0.4171;   // fraction of mask height
-const HOLE_AR   = 1.2971;   // width/height of the oval
+const HOLE_H    = 0.4171;
+const HOLE_AR   = 1.2971;
 
-let video, canvas, ctx;
-let offCanvas, offCtx;       // offscreen for warp sampling
+// face fills 78% of hole height (leaves room at top/bottom of oval frame)
+const FACE_FILL = 0.78;
+
+let video, canvas, ctx, offCanvas, offCtx;
 let maskImg = new Image(), lBrowImg = new Image(), rBrowImg = new Image();
 let modelsLoaded = false;
-let showMask = true, mirrored = true;
+let showMask = true;
+// FIX 2: default mirrored=false so front-camera direction matches natural expectation
+let mirrored = false;
 let lastBlob = null, detections = null, frameCount = 0;
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -116,12 +120,13 @@ window.addEventListener('DOMContentLoaded', async () => {
       video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} }, audio:false
     });
     video.srcObject = stream;
+    // FIX 2: no mirror transform on video element by default
+    video.style.transform = 'none';
     video.onloadedmetadata = () => {
-      const W = video.videoWidth || 640;
-      const H = video.videoHeight || 480;
-      canvas.width = W; canvas.height = H;
+      canvas.width  = video.videoWidth  || 640;
+      canvas.height = video.videoHeight || 480;
       offCanvas = document.createElement('canvas');
-      offCanvas.width = W; offCanvas.height = H;
+      offCanvas.width = canvas.width; offCanvas.height = canvas.height;
       offCtx = offCanvas.getContext('2d');
       document.getElementById('loadingOverlay').classList.add('hidden');
       document.getElementById('btnSnap').disabled = false;
@@ -156,140 +161,123 @@ function renderFrame() {
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0,0,W,H);
 
-  // Draw mirrored video to offscreen first (for pixel sampling in warp)
+  // Draw video to offscreen (respecting mirror) for pixel sampling
   offCtx.save();
   if (mirrored){ offCtx.translate(W,0); offCtx.scale(-1,1); }
   offCtx.drawImage(video,0,0,W,H);
   offCtx.restore();
 
   if (!showMask || !detections) {
-    // Just draw video directly
-    ctx.save();
-    if (mirrored){ ctx.translate(W,0); ctx.scale(-1,1); }
-    ctx.drawImage(video,0,0,W,H);
-    ctx.restore();
+    ctx.drawImage(offCanvas,0,0);
     if (showMask) drawCentered(W,H);
     return;
   }
-
   drawWithWarp(detections, W, H);
 }
 
-// ── Core: warp face into oval, then overlay mask + brows ─────────────────
 function drawWithWarp(det, W, H) {
   const lms = det.landmarks;
-  const mx  = pt => mirrored ? {x: W-pt.x, y:pt.y} : pt;
+  // FIX 2: landmarks from face-api are in video coords; mirror only if mirrored
+  const mx  = pt => mirrored ? {x: W-pt.x, y:pt.y} : {x:pt.x, y:pt.y};
 
   const jaw = lms.getJawOutline().map(mx);
   const lb  = lms.getLeftEyeBrow().map(mx);
   const rb  = lms.getRightEyeBrow().map(mx);
+  const le  = lms.getLeftEye().map(mx);
+  const re  = lms.getRightEye().map(mx);
 
-  // ── 1. Compute face bounding ellipse ──────────────────────────────────
+  // ── Face bounding box ────────────────────────────────────────────────
   const browTopY  = Math.min(...[...lb,...rb].map(p=>p.y));
   const jawBotY   = jaw[8].y;
   const browToJaw = jawBotY - browTopY;
-  const faceTop   = browTopY - browToJaw * 0.52;
-  const faceBot   = jawBotY  + browToJaw * 0.04;
+  // FIX 3: reduce face size — less forehead padding
+  const faceTop   = browTopY - browToJaw * 0.38;
+  const faceBot   = jawBotY  + browToJaw * 0.03;
   const faceH     = faceBot - faceTop;
   const faceCX    = (jaw[0].x + jaw[16].x) / 2;
   const faceCY    = (faceTop + faceBot) / 2;
   const faceW     = jaw[16].x - jaw[0].x;
 
-  // ── 2. Compute target oval dimensions (from mask hole) ─────────────────
-  // maskH drives everything: maskH = faceH / HOLE_H
-  const maskH     = faceH / HOLE_H;
-  const maskW     = maskH * (maskImg.naturalWidth / maskImg.naturalHeight);
-  const maskX     = faceCX - maskW * HOLE_CX;
-  const maskY     = faceCY - maskH * HOLE_CY;
+  // ── Mask sizing: faceH fills FACE_FILL fraction of oval height ───────
+  // FIX 3: FACE_FILL=0.78 so face is smaller inside the oval
+  const maskH  = (faceH / HOLE_H) / FACE_FILL;
+  const maskW  = maskH * (maskImg.naturalWidth / maskImg.naturalHeight);
+  const maskX  = faceCX - maskW * HOLE_CX;
+  const maskY  = faceCY - maskH * HOLE_CY;
 
-  // Oval size in canvas pixels
-  const ovalH     = maskH * HOLE_H;          // = faceH
-  const ovalW     = ovalH * HOLE_AR;         // width of the oval
-  const ovalCX    = faceCX;
-  const ovalCY    = faceCY;
-  const ovalRX    = ovalW / 2;               // oval x-radius
-  const ovalRY    = ovalH / 2;               // oval y-radius
+  // Oval dimensions in canvas pixels
+  const ovalH  = maskH * HOLE_H;
+  const ovalW  = ovalH * HOLE_AR;
+  const ovalRX = ovalW / 2;
+  const ovalRY = ovalH / 2;
 
-  // ── 3. Grab pixel data from offscreen (already mirrored video) ─────────
-  const srcData = offCtx.getImageData(0, 0, canvas.width, canvas.height);
+  // ── Warp pixels inside oval ──────────────────────────────────────────
+  const srcData = offCtx.getImageData(0,0,W,H);
   const src = srcData.data;
-  const cW = canvas.width, cH = canvas.height;
-
-  // ── 4. Warp: for each pixel inside the oval on canvas,
-  //    map it back to the face region with barrel-style squeeze
-  //    The face is narrower than the oval → stretch face horizontally to fill oval
-  const warpData = ctx.createImageData(cW, cH);
+  const warpData = ctx.createImageData(W,H);
   const dst = warpData.data;
 
-  // First copy the full video frame (background)
-  for (let i=0; i<src.length; i++) dst[i] = src[i];
+  // Copy full background first
+  for (let i=0;i<src.length;i++) dst[i]=src[i];
 
-  // Face region to sample from: face ellipse (faceW/2 x faceH/2 centered at faceCX,faceCY)
   const faceRX = faceW * 0.5;
   const faceRY = faceH * 0.5;
 
-  // Warp kernel: for each destination pixel in the oval,
-  // find the corresponding source pixel in the face ellipse
-  for (let dy = Math.floor(ovalCY - ovalRY) - 2; dy <= Math.ceil(ovalCY + ovalRY) + 2; dy++) {
-    if (dy < 0 || dy >= cH) continue;
-    for (let dx = Math.floor(ovalCX - ovalRX) - 2; dx <= Math.ceil(ovalCX + ovalRX) + 2; dx++) {
-      if (dx < 0 || dx >= cW) continue;
+  const x0 = Math.max(0, Math.floor(faceCX - ovalRX - 2));
+  const x1 = Math.min(W-1, Math.ceil(faceCX + ovalRX + 2));
+  const y0 = Math.max(0, Math.floor(faceCY - ovalRY - 2));
+  const y1 = Math.min(H-1, Math.ceil(faceCY + ovalRY + 2));
 
-      // Normalized position within oval (-1..1)
-      const nx = (dx - ovalCX) / ovalRX;
-      const ny = (dy - ovalCY) / ovalRY;
+  for (let dy=y0; dy<=y1; dy++) {
+    for (let dx=x0; dx<=x1; dx++) {
+      const nx = (dx - faceCX) / ovalRX;
+      const ny = (dy - faceCY) / ovalRY;
       const d2 = nx*nx + ny*ny;
-      if (d2 > 1.02) continue;  // outside oval
+      if (d2 > 1.02) continue;
 
-      // Barrel/bulge: compress edges inward slightly so face fills oval naturally
-      // Apply gentle spherical remap: src coords stretch toward edges
       const d = Math.sqrt(d2);
-      // Fisheye-style: inward pull stronger at edges
-      const warpFactor = d > 0 ? (Math.asin(Math.min(d,1)) / (Math.PI/2)) / d : 1;
-      const sx_n = nx * warpFactor;
-      const sy_n = ny * warpFactor;
+      // Spherical inward remap: stretches face outward to fill oval
+      const wf = d > 0 ? Math.asin(Math.min(d,1)) / (Math.PI/2) / d : 1;
+      const sx = faceCX + nx * wf * faceRX;
+      const sy = faceCY + ny * wf * faceRY;
 
-      // Map from oval-normalized back to face pixel coords
-      const sx = faceCX + sx_n * faceRX;
-      const sy = faceCY + sy_n * faceRY;
-
-      // Bilinear sample from src
-      const six = Math.max(0, Math.min(cW-2, sx|0));
-      const siy = Math.max(0, Math.min(cH-2, sy|0));
-      const fx = sx - six, fy = sy - siy;
-
-      const i00 = (siy*cW + six)*4;
-      const i10 = i00 + 4;
-      const i01 = i00 + cW*4;
-      const i11 = i01 + 4;
-      const di  = (dy*cW + dx)*4;
-
-      // Edge feather within oval
-      const edge = Math.min(1, (1 - d) * 8);
-      const alpha = Math.min(255, edge * 255);
-
-      for (let c=0; c<3; c++) {
-        const sampled = lerp(lerp(src[i00+c],src[i10+c],fx), lerp(src[i01+c],src[i11+c],fx), fy);
-        dst[di+c] = Math.round(lerp(src[di+c], sampled, edge));
+      const six = Math.max(0,Math.min(W-2,sx|0));
+      const siy = Math.max(0,Math.min(H-2,sy|0));
+      const fx=sx-six, fy=sy-siy;
+      const i00=(siy*W+six)*4, i10=i00+4, i01=i00+W*4, i11=i01+4;
+      const di=(dy*W+dx)*4;
+      const edge = Math.min(1,(1-d)*8);
+      for (let c=0;c<3;c++){
+        const s=lerp(lerp(src[i00+c],src[i10+c],fx),lerp(src[i01+c],src[i11+c],fx),fy);
+        dst[di+c]=Math.round(lerp(src[di+c],s,edge));
       }
-      dst[di+3] = 255;
+      dst[di+3]=255;
     }
   }
+  ctx.putImageData(warpData,0,0);
 
-  ctx.putImageData(warpData, 0, 0);
-
-  // ── 5. Overlay mask ────────────────────────────────────────────────────
+  // ── Mask overlay ──────────────────────────────────────────────────────
   ctx.drawImage(maskImg, maskX, maskY, maskW, maskH);
 
-  // ── 6. Eyebrows: uniform size, each on its own centroid ────────────────
+  // ── Eyebrows ──────────────────────────────────────────────────────────
+  // FIX 1: place brows at actual eye/brow landmark position, not above
+  // Use eye top as anchor — brow image should sit just above the eye top
+  const leTop = Math.min(...le.map(p=>p.y));
+  const reTop = Math.min(...re.map(p=>p.y));
+  const lbCX  = avg(lb.map(p=>p.x));
+  const rbCX  = avg(rb.map(p=>p.x));
+
   const lbSpan = Math.abs(lb[lb.length-1].x - lb[0].x);
   const rbSpan = Math.abs(rb[rb.length-1].x - rb[0].x);
   const browW  = Math.max(lbSpan, rbSpan) * 1.5;
-  const browH2 = browW * (lBrowImg.naturalHeight / lBrowImg.naturalWidth);
-  const lbCX = avg(lb.map(p=>p.x)), lbCY = avg(lb.map(p=>p.y));
-  const rbCX = avg(rb.map(p=>p.x)), rbCY = avg(rb.map(p=>p.y));
-  ctx.drawImage(lBrowImg, lbCX - browW/2, lbCY - browH2*0.55, browW, browH2);
-  ctx.drawImage(rBrowImg, rbCX - browW/2, rbCY - browH2*0.55, browW, browH2);
+  const browH  = browW * (lBrowImg.naturalHeight / lBrowImg.naturalWidth);
+
+  // Anchor bottom of brow image to eye top, with small overlap
+  const lBrowY = leTop - browH * 0.70;
+  const rBrowY = reTop - browH * 0.70;
+
+  ctx.drawImage(lBrowImg, lbCX - browW/2, lBrowY, browW, browH);
+  ctx.drawImage(rBrowImg, rbCX - browW/2, rBrowY, browW, browH);
 }
 
 function drawCentered(W, H) {
@@ -299,8 +287,8 @@ function drawCentered(W, H) {
   ctx.drawImage(maskImg,(W-mw)/2,H*0.02,mw,mh);
 }
 
-function lerp(a,b,t){ return a+(b-a)*t; }
-function avg(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function lerp(a,b,t){return a+(b-a)*t;}
+function avg(arr){return arr.reduce((a,b)=>a+b,0)/arr.length;}
 
 function takeSnapshot() {
   canvas.toBlob(blob => {
